@@ -1,5 +1,6 @@
 package com.arca.c3;
 
+import com.arca.ServiciosArca;
 import org.camunda.bpm.engine.delegate.DelegateExecution;
 import org.camunda.bpm.engine.delegate.JavaDelegate;
 import org.slf4j.Logger;
@@ -7,11 +8,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.time.Instant;
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
+import static com.arca.ServiciosArca.datos;
+import static com.arca.ServiciosArca.ruta;
 import static com.arca.Variables.numero;
 import static com.arca.Variables.siNo;
 import static com.arca.Variables.texto;
@@ -19,25 +20,30 @@ import static com.arca.Variables.texto;
 /**
  * C3 Suscribir la solicitud y sus procesos invocados C1 Calcular el Pre-Score y C3.1 Notificar la decisión.
  * Responsable: Jesus Gregorio Delgado.
- * Misma lógica simulada que worker/index.js: los pesos y factores son de demo, como en la plataforma.
+ * El Pre-Score, el puntaje compuesto, la cotización y el plan de mejora los calcula el Score Engine de
+ * arca-servicios, que además guarda la evaluación. El proceso usa esos resultados en la DMN y en sus compuertas.
  */
 @Configuration
 public class C3Delegates {
     private static final Logger LOG = LoggerFactory.getLogger(C3Delegates.class);
     private static final List<String> HALLAZGOS = List.of("restriccionCapa1", "reclamoPagado", "incidenteIA", "sinEOVigente");
-    private static final Map<String, Double> FACTOR_GOBERNANZA =
-            Map.of("FORTRESS", 0.85, "FORTIFIED", 0.95, "GUARDED", 1.1, "EXPOSED", 1.3, "CRITICAL", 1.5);
 
     // ---------- C1 Calcular el Pre-Score (Capa 1). En la plataforma, OpenAI lee la web y Apify consulta el colegio y Avvo.
+    /** Identifica la firma por su dominio en el registro de firmas de arca-servicios. */
     @Bean
-    public JavaDelegate c1EscanearWeb() {
+    public JavaDelegate c1EscanearWeb(ServiciosArca servicios) {
         return ex -> {
-            String dominio = texto(ex, "dominio", "firma-demo.com");
-            LOG.info("[C1] Web de {} escaneada: firma identificada", dominio);
-            ex.setVariable("firmaIdentificada", dominio.split("\\.")[0]);
+            String dominio = texto(ex, "dominio", null);
+            List<Map<String, Object>> firmas = servicios.lista(ruta("/api/firmas?dominio={d}", dominio));
+            boolean registrada = !firmas.isEmpty();
+            Object identificada = registrada ? firmas.get(0).get("nombre") : dominio.split("\\.")[0];
+            LOG.info("[C1] Web de {} escaneada: {}", dominio, registrada ? "firma registrada " + identificada : "firma sin historial");
+            ex.setVariable("firmaIdentificada", identificada);
+            ex.setVariable("firmaRegistrada", registrada);
         };
     }
 
+    /** Búsqueda de abogados en el colegio y en Avvo (Apify). Simulada: usa el número declarado por la firma. */
     @Bean
     public JavaDelegate c1BuscarAbogados() {
         return ex -> {
@@ -47,40 +53,56 @@ public class C3Delegates {
         };
     }
 
+    /** Pide al Score Engine el Pre-Score de 0 a 100 y la restricción disciplinaria de la firma. */
     @Bean
-    public JavaDelegate c1CalcularPrescore() {
+    public JavaDelegate c1CalcularPrescore(ServiciosArca servicios) {
         return ex -> {
-            double preScore = numero(ex, "puntajeCapa1", 60);
-            boolean restriccion = siNo(ex, "restriccionCapa1");
-            LOG.info("[C1] Pre-Score {}{}", preScore, restriccion ? " con restricción (antecedente disciplinario)" : "");
+            Map<String, Object> r = servicios.post("/api/score/pre-score",
+                    datos("dominio", texto(ex, "dominio", null), "abogados", ex.getVariable("abogados")));
+            double preScore = ((Number) r.get("preScore")).doubleValue();
+            boolean restriccion = Boolean.TRUE.equals(r.get("restriccion"));
+            LOG.info("[C1] Score Engine: Pre-Score {}{}", preScore, restriccion ? " con restricción (antecedente disciplinario)" : "");
             ex.setVariable("puntajeCapa1", preScore);
             ex.setVariable("restriccionCapa1", restriccion);
-            ex.setVariable("senalesCapa1", "AI Governance, Professional Standing, Reputation, Firm Maturity");
+            ex.setVariable("senalesCapa1", r.get("senales"));
         };
     }
 
     // ---------- C3
-    /** Cuestionario de Capa 2: entre 8 y 12 preguntas según lo que encontró la Capa 1. */
+    /** Arma el cuestionario (8 a 12 preguntas según los hallazgos) y registra la evaluación en arca-servicios. */
     @Bean
-    public JavaDelegate c3PresentarCuestionario() {
+    public JavaDelegate c3PresentarCuestionario(ServiciosArca servicios) {
         return ex -> {
+            servicios.post("/api/evaluaciones", datos(
+                    "clave", ex.getProcessBusinessKey(),
+                    "processInstanceId", ex.getProcessInstanceId(),
+                    "firma", ex.getVariable("firma"),
+                    "dominio", ex.getVariable("dominio"),
+                    "abogados", Math.round(numero(ex, "abogados", 5)),
+                    "preScore", ex.getVariable("puntajeCapa1")));
             long preguntas = Math.min(12, 8 + contarHallazgos(ex));
-            LOG.info("[C3] Cuestionario de {} preguntas presentado a {}", preguntas, texto(ex, "dominio", "la firma"));
+            LOG.info("[C3] Evaluación {} registrada; cuestionario de {} preguntas presentado", ex.getProcessBusinessKey(), preguntas);
             ex.setVariable("numeroPreguntas", preguntas);
         };
     }
 
-    /** Puntaje compuesto: 30 % Capa 1 y 70 % Capa 2 (pesos de demo). */
+    /** El Score Engine calcula el puntaje compuesto (30 % Capa 1, 70 % cuestionario) y si hay revisión forzada. */
     @Bean
-    public JavaDelegate c3CalcularScore() {
+    public JavaDelegate c3CalcularScore(ServiciosArca servicios) {
         return ex -> {
-            double capa1 = numero(ex, "puntajeCapa1", 60);
-            double capa2 = numero(ex, "puntajeCapa2", 60);
-            long puntaje = Math.round(0.3 * capa1 + 0.7 * capa2);
-            boolean revisionForzada = contarHallazgos(ex) > 0;
-            LOG.info("[C3] Puntaje {} (Capa 1 {}, Capa 2 {}); revisión forzada: {}", puntaje, capa1, capa2, revisionForzada);
+            Map<String, Object> r = servicios.post("/api/score/puntaje", datos(
+                    "clave", ex.getProcessBusinessKey(),
+                    "puntajeCapa1", numero(ex, "puntajeCapa1", 60),
+                    "puntajeCapa2", numero(ex, "puntajeCapa2", 60),
+                    "reclamoPagado", siNo(ex, "reclamoPagado"),
+                    "incidenteIA", siNo(ex, "incidenteIA"),
+                    "sinEOVigente", siNo(ex, "sinEOVigente"),
+                    "restriccionCapa1", siNo(ex, "restriccionCapa1")));
+            long puntaje = ((Number) r.get("puntaje")).longValue();
+            boolean forzada = Boolean.TRUE.equals(r.get("revisionForzada"));
+            LOG.info("[C3] Score Engine: puntaje {}; revisión forzada: {}", puntaje, forzada);
             ex.setVariable("puntaje", puntaje);
-            ex.setVariable("revisionForzada", revisionForzada);
+            ex.setVariable("revisionForzada", forzada);
         };
     }
 
@@ -89,35 +111,42 @@ public class C3Delegates {
         return ex -> LOG.info("[C3] Resultados y plan de acción mostrados: puntaje {}", ex.getVariable("puntaje"));
     }
 
-    /** Prima anual = 420 × abogados × factor de gobernanza × área × jurisdicción × tamaño (fórmula de diseño). */
+    /** El Score Engine cotiza la prima anual según el tier y guarda la cotización en la evaluación. */
     @Bean
-    public JavaDelegate c3CalcularCotizacion() {
+    public JavaDelegate c3CalcularCotizacion(ServiciosArca servicios) {
         return ex -> {
-            double abogados = numero(ex, "abogados", 5);
-            double factor = FACTOR_GOBERNANZA.getOrDefault(texto(ex, "tier", ""), 1.0);
-            double otros = numero(ex, "factorArea", 1) * numero(ex, "factorJurisdiccion", 1) * numero(ex, "factorTamano", 1);
-            long prima = Math.round(420 * abogados * factor * otros);
-            String limite = texto(ex, "limiteSolicitado", "Professional");
-            LOG.info("[C3] Cotización: prima anual USD {}, límite {}", prima, limite);
+            Map<String, Object> r = servicios.post("/api/score/cotizacion", datos(
+                    "clave", ex.getProcessBusinessKey(),
+                    "abogados", Math.round(numero(ex, "abogados", 5)),
+                    "tier", ex.getVariable("tier"),
+                    "limiteSolicitado", ex.getVariable("limiteSolicitado")));
+            long prima = ((Number) r.get("primaAnual")).longValue();
+            LOG.info("[C3] Score Engine: prima anual USD {}, límite {}", prima, r.get("limiteOfrecido"));
             ex.setVariable("primaAnual", prima);
-            ex.setVariable("limiteOfrecido", limite);
+            ex.setVariable("limiteOfrecido", r.get("limiteOfrecido"));
         };
     }
 
     @Bean
-    public JavaDelegate c3GenerarPlanMejora() {
+    public JavaDelegate c3GenerarPlanMejora(ServiciosArca servicios) {
         return ex -> {
-            String fecha = LocalDate.now().plusDays(90).toString();
-            LOG.info("[C3] Plan de mejora generado; nueva evaluación el {}", fecha);
-            ex.setVariable("fechaReevaluacion", fecha);
+            Map<String, Object> r = servicios.post("/api/score/plan-mejora", datos("clave", ex.getProcessBusinessKey()));
+            LOG.info("[C3] Plan de mejora generado; nueva evaluación el {}", r.get("fechaReevaluacion"));
+            ex.setVariable("fechaReevaluacion", r.get("fechaReevaluacion"));
         };
     }
 
+    /** Registra la decisión final en el expediente de la evaluación. */
     @Bean
-    public JavaDelegate c3RegistrarDecision() {
+    public JavaDelegate c3RegistrarDecision(ServiciosArca servicios) {
         return ex -> {
-            LOG.info("[C3] Decisión {} registrada en el expediente", ex.getVariable("decision"));
-            ex.setVariable("fechaDecision", Instant.now().toString());
+            String decision = texto(ex, "decision", null);
+            Map<String, Object> r = servicios.put(ruta("/api/evaluaciones/{clave}", ex.getProcessBusinessKey()), datos(
+                    "estado", "ACCEPT".equals(decision) ? "ACEPTADA" : "DECLINADA",
+                    "tier", ex.getVariable("tier"),
+                    "decision", decision));
+            LOG.info("[C3] Decisión {} registrada en el expediente {}", decision, r.get("clave"));
+            ex.setVariable("fechaDecision", String.valueOf(r.get("actualizadaEn")));
         };
     }
 

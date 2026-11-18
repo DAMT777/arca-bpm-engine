@@ -310,3 +310,11 @@ tr:last-child td { border-bottom: 0; }
 .procesos-lista div { display: flex; gap: 12px; align-items: flex-start; font-size: .92rem; }
 .procesos-lista p { color: var(--texto-suave); font-size: .86rem; }
 .pie { text-align: center; color: var(--texto-suave); font-size: .8rem; padding: 24px 16px 32px; }
+
+/* ---------- Pólizas de la firma en el formulario de siniestro */
+.polizas { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); margin: -4px 0 16px; }
+.poliza { display: flex; flex-direction: column; gap: 2px; text-align: left; border: 1px solid var(--borde); background: var(--superficie-2); color: var(--texto); border-radius: 10px; padding: 10px 12px; font-size: .84rem; }
+.poliza span { color: var(--texto-suave); }
+.poliza:hover { border-color: var(--acento); }
+.poliza.elegida { border-color: var(--acento); background: var(--acento-suave); }
+.firma-box b { font-size: .98rem; }

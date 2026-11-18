@@ -1,5 +1,6 @@
 package com.arca.web;
 
+import com.arca.ServiciosArca;
 import org.camunda.bpm.engine.MismatchingMessageCorrelationException;
 import org.camunda.bpm.engine.ProcessEngineException;
 import org.camunda.bpm.engine.exception.NotFoundException;
@@ -18,6 +19,19 @@ import java.util.Map;
 public class ErroresControlados {
     private static final Logger LOG = LoggerFactory.getLogger(ErroresControlados.class);
 
+    /** arca-servicios rechazó la petición (se respeta su 4xx) o no respondió (503). */
+    @ExceptionHandler(ServiciosArca.ServicioException.class)
+    public ResponseEntity<Map<String, String>> servicio(ServiciosArca.ServicioException e) {
+        LOG.warn(e.getMessage());
+        int estado = e.getEstado() >= 400 && e.getEstado() < 600 ? e.getEstado() : 502;
+        return respuesta(HttpStatus.valueOf(estado), e.getMessage());
+    }
+
+    @ExceptionHandler(java.util.NoSuchElementException.class)
+    public ResponseEntity<Map<String, String>> sinResultado(java.util.NoSuchElementException e) {
+        return respuesta(HttpStatus.NOT_FOUND, e.getMessage());
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, String>> datosInvalidos(IllegalArgumentException e) {
         return respuesta(HttpStatus.BAD_REQUEST, e.getMessage());
@@ -35,6 +49,11 @@ public class ErroresControlados {
 
     @ExceptionHandler(ProcessEngineException.class)
     public ResponseEntity<Map<String, String>> motor(ProcessEngineException e) {
+        for (Throwable c = e.getCause(); c != null; c = c.getCause()) {
+            if (c instanceof ServiciosArca.ServicioException s) {
+                return servicio(s);
+            }
+        }
         LOG.warn("Error del motor: {}", e.getMessage());
         return respuesta(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
     }

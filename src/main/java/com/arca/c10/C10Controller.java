@@ -28,8 +28,7 @@ public class C10Controller {
         this.instancias = instancias;
     }
 
-    public record Aviso(String firma, String numeroPoliza, String fechaHecho, String inicioVigencia,
-                        String finVigencia, String descripcionHecho) {
+    public record Aviso(String firma, String numeroPoliza, String fechaHecho, String descripcionHecho) {
     }
 
     @PostMapping("/avisos")
@@ -38,24 +37,16 @@ public class C10Controller {
         obligatorio(aviso.numeroPoliza(), "el número de póliza");
         obligatorio(aviso.descripcionHecho(), "la descripción del hecho");
         LocalDate hecho = fecha(aviso.fechaHecho(), "la fecha del hecho", true);
-        LocalDate inicio = fecha(aviso.inicioVigencia(), "el inicio de vigencia", false);
-        LocalDate fin = fecha(aviso.finVigencia(), "el fin de vigencia", false);
-        if ((inicio == null) != (fin == null)) {
-            throw new IllegalArgumentException("Indica las dos fechas de vigencia o ninguna");
-        }
-        if (inicio != null && fin.isBefore(inicio)) {
-            throw new IllegalArgumentException("El fin de vigencia es anterior al inicio");
+        if (hecho.isAfter(LocalDate.now())) {
+            throw new IllegalArgumentException("La fecha del hecho no puede ser futura");
         }
 
+        // La vigencia ya no la informa la firma: el proceso la verifica en el registro de pólizas de arca-servicios
         Map<String, Object> variables = new HashMap<>();
         variables.put("firma", aviso.firma().trim());
-        variables.put("numeroPoliza", aviso.numeroPoliza().trim());
+        variables.put("numeroPoliza", aviso.numeroPoliza().trim().toUpperCase());
         variables.put("descripcionHecho", aviso.descripcionHecho().trim());
         variables.put("fechaHecho", hecho.toString());
-        if (inicio != null) {
-            variables.put("inicioVigencia", inicio.toString());
-            variables.put("finVigencia", fin.toString());
-        }
         String clave = instancias.nuevaClave("AV");
         ProcessInstance pi = runtimeService.createMessageCorrelation("AvisoReclamacion")
                 .processInstanceBusinessKey(clave)

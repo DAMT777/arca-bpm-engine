@@ -35,3 +35,5 @@ camunda:
 arca:
   # Contraseña común de los usuarios de demo de cada rol (ver README)
   demo-password: ${ARCA_DEMO_PASSWORD}
+  # Servicios de negocio y Score Engine (repositorio arca-servicios), invocados por los JavaDelegates
+  servicios-url: ${ARCA_SERVICIOS_URL:http://localhost:8091}
