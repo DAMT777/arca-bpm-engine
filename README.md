@@ -2,6 +2,8 @@
 
 Los tres procesos de ARCA corren en un motor Camunda 7.24.0 embebido en una aplicación Spring Boot 3.5.5 con Java 21 y una base Postgres propia. Al arrancar, la aplicación despliega los procesos y sirve dos vistas: el portal de la firma y el panel interno por rol. Cockpit, Tasklist y Admin quedan en `/camunda/app/`.
 
+Este repositorio es un componente de [ARCA · hub del proyecto](https://github.com/DAMT777/arca-hub). El hub tiene la guía general, la arquitectura y los enlaces a los demás repositorios.
+
 | Proceso | Responsable | Código Java | Modelos |
 |---|---|---|---|
 | C10 Registrar el aviso de siniestro | Diego Alejandro Machado Tovar | `src/main/java/com/arca/c10` | `src/main/resources/procesos/c10` |
@@ -34,7 +36,7 @@ Las vistas están hechas con **React 18** sin paso de compilación. Usan [htm](h
 
 ## Qué cambia frente a la versión con Camunda Run
 
-- Los BPMN, DMN y formularios son copias de las carpetas de cada proceso. Las carpetas originales y sus workers en JavaScript siguen igual y funcionan con Camunda Run.
+- Los BPMN, DMN y formularios son copias de las carpetas de cada proceso del repositorio [arca-procesos-camunda-run](https://github.com/yixx16/bpmn), dentro de su carpeta `arca/`. Esas carpetas originales y sus workers en JavaScript siguen igual y funcionan con Camunda Run.
 - Cada External Task pasó a un **JavaDelegate** (`camunda:delegateExpression="${c10AcusarRecibo}"`, etc.) con la misma lógica simulada del worker. Si falta un dato o no tiene formato válido, el delegate lanza un error con un mensaje claro y el motor deja un incidente visible en Cockpit.
 - Las tareas de usuario de C10 y C3 usan `camunda:formRef` con binding `deployment`, igual que G3, porque Spring Boot despliega los formularios con su ruta y no solo con el nombre del archivo.
 - Lo que antes simulaba `demo.mjs` ahora se hace en las vistas: la firma envía el aviso, inicia la evaluación y responde el cuestionario, y el carrier aprueba o rechaza la versión.
@@ -86,11 +88,13 @@ Al arrancar se crean los grupos candidatos de los BPMN y un usuario de demo por 
 2. Completa las tareas en orden: Actuario (consolidar), **Ingeniero de Datos** (calibrar), Actuario (documentar) y **Comité de Modelo** (decidir).
 3. Con el rol **Carrier**, aprueba o rechaza. La tabla **Versiones del modelo** muestra el final: publicada, rechazada, no aprobada por el carrier o despliegue revertido.
 
-Cockpit muestra cada instancia y por dónde pasó. Los temporizadores de 24 h y 15 días se adelantan con el script del equipo apuntado a este motor, desde la carpeta `arca`:
+Cockpit muestra cada instancia y por dónde pasó. Los temporizadores de 24 h y 15 días se adelantan con el script `pruebas/demo.mjs`, que está en el repositorio [arca-procesos-camunda-run](https://github.com/yixx16/bpmn). Necesita Node.js 18 o superior. Desde la carpeta `arca` de ese repositorio, o desde `arca-hub/arca-procesos-camunda-run/arca` si clonaste el hub, apuntado a este motor:
 
 ```bash
 CAMUNDA_URL=http://localhost:8090/engine-rest node pruebas/demo.mjs vencer c3
 ```
+
+Cambia `c3` por `c10` o `g3` según el proceso cuyo temporizador quieras disparar.
 
 ## Pruebas automáticas
 
